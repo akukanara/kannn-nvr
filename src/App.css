@@ -299,6 +299,16 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+.timeline-time-link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.timeline-time-link:hover {
+  color: var(--colorBrandForeground1, #0078d4);
+}
+
 .timeline-camera {
   font-size: 10px;
   color: #999;

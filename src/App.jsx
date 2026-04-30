@@ -347,8 +347,13 @@ function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys,
     showImage(frameUrl);
   };
 
-  const handleItemClick = (item) => {
-    setInfoDialog({ open: true, item });
+  const handleDownloadClick = (e, item) => {
+    e.stopPropagation();
+    const camera = cameras?.find(c => c.key === item.cameraKey);
+    if (item.startSegment) {
+      const qs = camera ? `?preseq=${camera.segments_prior_to_movement}&postseq=${camera.segments_post_movement}` : '';
+      window.open(`/mp4/${item.startSegment}/${item.seconds}/${item.cameraKey}${qs}`, '_blank');
+    }
   };
 
   const renderBadges = (item) => {
@@ -423,9 +428,18 @@ function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys,
           <div 
             key={item.key}
             className={`timeline-item ${isSelected ? 'selected' : ''} ${isProcessing ? 'processing' : ''} ${!hasDetections ? 'no-detection' : ''} ${highlightedKeys.has(item.key) ? 'highlighted-row' : ''}`}
-            onClick={() => handleItemClick(item)}
           >
-            <span className="timeline-time">{timeStr}</span>
+            <Menu positioning="below-start">
+              <MenuTrigger disableButtonEnhancement>
+                <span className="timeline-time timeline-time-link">{timeStr}</span>
+              </MenuTrigger>
+              <MenuPopover>
+                <MenuList>
+                  <MenuItem icon={<ArrowDownload16Regular />} disabled={!item.startSegment} onClick={(e) => handleDownloadClick(e, item)}>Download MP4</MenuItem>
+                  <MenuItem icon={<Database20Regular />} onClick={() => setInfoDialog({ open: true, item })}>Movement Info</MenuItem>
+                </MenuList>
+              </MenuPopover>
+            </Menu>
             <span className="timeline-camera">{item.cameraName} ({item.seconds}s)</span>
             <div className="timeline-badges">
               {renderBadges(item)}
@@ -687,14 +701,6 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
     };
   }, [mode]); // Only depend on mode - config changes shouldn't reconnect SSE
 
-  function downloadMovement() {
-    if (currentPlaying && currentPlaying.cKey && currentPlaying.mKey) {
-      const c = data.cameras.find(c => c.key === currentPlaying.cKey)
-      const m = data.movements.find(m => m.key === currentPlaying.mKey)
-      window.open(`/mp4/${m.movement.startSegment}/${m.movement.seconds}/${m.movement.cameraKey}${(c && mode !== 'Time') ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
-    }
-  }
-
   return <>
 
       <Portal>
@@ -731,12 +737,6 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
               </MenuList>
             </MenuPopover>
           </Menu>
-
-          <ToolbarButton
-
-            icon={<ArrowDownload16Regular />}
-            onClick={downloadMovement}
-          />
 
           <Menu positioning="below-end">
             <MenuTrigger disableButtonEnhancement>
