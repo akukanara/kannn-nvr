@@ -163,19 +163,20 @@ function App() {
   function showImage(imageUrl) {
     setDisplayImage(imageUrl);
     setCurrentPlaying(null); // Stop video when showing image
+    window.location.hash = `image/${encodeURIComponent(imageUrl)}`;
   }
   
   function playVideo(cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement, segDuration) {
     setDisplayImage(null); // Clear image when playing video
     console.log (`App() : playVideo :   cameraKey=${cKey} mKey=${mKey} (${mStartSegment}/${mSeconds}) (prior:${segments_prior_to_movement}/post:${segments_post_movement})`)
     const mPlayer = playerRef.current
-    //console.log ("playVideo data: ", data)
-    //const camera = cKey && data.cameras.find(c => c.key === cKey)
     if (cKey && mPlayer && (!currentPlaying || (currentPlaying.cKey !== cKey || currentPlaying.mKey !== mKey))) {
-
       setCurrentPlaying({ cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement, segDuration})
-      
-      
+      if (mKey) {
+        window.location.hash = `play/${cKey}/${mKey}`;
+      } else {
+        window.location.hash = '';
+      }
     } else {
       console.warn(`App() : playVideo : player not ready or cannot find camera, or already playing selected camera/movement`)
     }
@@ -506,6 +507,9 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
     movementsRef.current = data.movements;
   }, [data.movements]);
 
+  // Track whether the initial deep link has been consumed
+  const deepLinkConsumed = React.useRef(false);
+
   function getServerData() {
     console.log ('getServerData, mode=', mode)
     setData({...init_data, status: 'fetching'})
@@ -521,6 +525,25 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
 
           console.log (`got refresh, find first streaming enabled camera & play, hasMore=${result.hasMore}`)
           const streamingCameras = result?.cameras.filter(c => c.enable_streaming)
+
+          // Handle deep link on first load
+          if (!deepLinkConsumed.current) {
+            deepLinkConsumed.current = true;
+            const hash = window.location.hash.slice(1);
+            if (hash.startsWith('play/')) {
+              const [, cKey, mKey] = hash.split('/');
+              const movement = result.movements.find(m => m.key === mKey);
+              const camera = result.cameras.find(c => c.key === cKey);
+              if (movement && camera) {
+                playVideo(cKey, mKey, movement.movement.startSegment, movement.movement.seconds, camera.segments_prior_to_movement, camera.segments_post_movement, movement.movement.lhs_seg_duration_seq);
+                return;
+              }
+            } else if (hash.startsWith('image/')) {
+              const imageUrl = decodeURIComponent(hash.slice(6));
+              showImage(imageUrl);
+              return;
+            }
+          }
 
           if (currentPlaying && streamingCameras.findIndex(c => c.key === currentPlaying.cKey) >= 0 && (!currentPlaying.mKey || result?.movements.findIndex(m => m.key === currentPlaying.mKey) >= 0)) {
             console.log (`we can continue playing same before refresh, because camera and/or movement is still valid`)
