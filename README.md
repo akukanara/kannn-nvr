@@ -1,7 +1,9 @@
 
 
 
-#  Open-Source Network Video Recorder (NVR), with Object Detection
+# Kannn NVR
+
+### Open-Source Network Video Recorder (NVR) with Object Detection
 
 Web application to monitor your IP Security Camera network, continuously record camera feeds to your computers harddrive, and monitor motion events through a web app. Features include:
 

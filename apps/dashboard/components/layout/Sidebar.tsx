@@ -26,11 +26,16 @@ export function Sidebar() {
     >
       <HStack px={4} mb={8} gap={3}>
         <Box w={8} h={8} borderRadius="md" bg="accent.default" display="flex" alignItems="center" justifyContent="center">
-          <Text fontSize="sm" fontWeight="bold" color="fg.primary">NVR</Text>
+          <Text fontSize="sm" fontWeight="bold" color="white">K</Text>
         </Box>
-        <Text fontSize="lg" fontWeight="semibold" color="fg.primary">
-          Surveillance
-        </Text>
+        <VStack align="stretch" gap={0}>
+          <Text fontSize="lg" fontWeight="bold" lineHeight="none" color="fg.primary">
+            Kannn
+          </Text>
+          <Text fontSize="2xs" fontWeight="bold" letterSpacing="wider" color="fg.muted" mt={0.5}>
+            NVR SYSTEM
+          </Text>
+        </VStack>
       </HStack>
 
       <VStack gap={1} align="stretch" flex={1}>

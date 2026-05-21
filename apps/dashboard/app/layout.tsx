@@ -5,8 +5,8 @@ import { QueryProvider } from '@/providers/QueryProvider';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'NVR Dashboard',
-  description: 'Network Video Recorder Dashboard',
+  title: 'Kannn NVR',
+  description: 'Kannn Network Video Recorder Dashboard',
 };
 
 export default function RootLayout({
