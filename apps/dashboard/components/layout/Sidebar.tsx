@@ -26,7 +26,7 @@ export function Sidebar() {
       zIndex={50}
     >
       <HStack px={4} mb={8} gap={3} align="center">
-        <KannnLogo w="34px" h="34px" color="accent.default" />
+        <KannnLogo w="42px" h="34px" color="fg.primary" />
         <VStack align="start" gap={0}>
           <Text fontSize="lg" fontWeight="bold" lineHeight="none" color="fg.primary">
             Kannn
