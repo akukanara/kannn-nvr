@@ -13,7 +13,7 @@
  */
 
 import fs from 'fs/promises';
-import { ChildProcessWithoutNullStreams } from 'child_process';
+import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import {
     spawnProcess,
     createFFmpegFrameProcessor,
@@ -339,7 +339,8 @@ function killMLProcess(proc: ChildProcessWithoutNullStreams): void {
  */
 export async function controllerDetector(): Promise<void> {
     const { settings } = deps.getSettingsCache();
-    const enabled = settings.detection_enable && !!settings.detection_model;
+    const modelPath = settings.detection_model || 'model/yolo11n.onnx';
+    const enabled = settings.detection_enable;
 
     // If disabled, stop any running process
     if (!enabled) {
@@ -410,10 +411,10 @@ export async function controllerDetector(): Promise<void> {
             const aiDir = `${baseDir}/../ai`;
             
             // Use stub detector for testing (doesn't require OpenCV/ONNX)
-            const isStub = settings.detection_model === 'stub';
+            const isStub = modelPath === 'stub';
             const cmdArgs = isStub 
                 ? ['-u', '-m', 'detector.detect_stub']
-                : ['-u', '-m', 'detector.detect', '--model_path', settings.detection_model];
+                : ['-u', '-m', 'detector.detect', '--model_path', modelPath];
 
             if (!isStub && settings.detection_target_hw) {
                 cmdArgs.push('--target', settings.detection_target_hw);
@@ -469,7 +470,7 @@ export async function controllerDetector(): Promise<void> {
 
             deps.logger.info('ML detection pipeline initialized', {
                 pid: _inmem_mlDetectionProcess.pid,
-                model: settings.detection_model,
+                model: modelPath,
                 target: settings.detection_target_hw || 'default'
             });
         } catch (error) {
@@ -721,6 +722,67 @@ export async function controllerFFmpegConfirmation(
  *   - Only run if configured interval has elapsed
  *   - Only run after secMovementStartupDelay since ffmpeg started/restarted
  */
+/**
+ * detectServerSideMovement - Detects motion using FFmpeg scene change detection on the latest HLS segment.
+ * This runs locally on the NVR server (0% camera side CPU required, compatible with V380/V380Pro or any camera).
+ */
+async function detectServerSideMovement(cameraEntry: CameraEntry): Promise<boolean> {
+    const streamDir = `${cameraEntry.disk}/${cameraEntry.folder}`;
+    try {
+        const files = await fs.readdir(streamDir);
+        const tsFiles = files
+            .filter(f => f.endsWith('.ts'))
+            .map(f => ({
+                name: f,
+                path: `${streamDir}/${f}`,
+            }));
+
+        if (tsFiles.length < 2) {
+            // Wait for at least 2 segments to be written to ensure we are testing a fully written, finished one
+            return false;
+        }
+
+        // Sort chronologically using numeric sequence comparison
+        tsFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+        // Use the second-to-last segment (the most recently completed one)
+        const targetSegment = tsFiles[tsFiles.length - 2];
+
+        return new Promise<boolean>((resolveReject) => {
+            const ffmpeg = spawn(FFMPEG_CMD, [
+                '-i', targetSegment.path,
+                '-vf', "select='gt(scene,0.02)',showinfo",
+                '-f', 'null',
+                '-'
+            ]);
+
+            let hasMotion = false;
+            ffmpeg.stderr.on('data', (data) => {
+                const chunk = data.toString();
+                if (chunk.includes('showinfo')) {
+                    hasMotion = true;
+                }
+            });
+
+            ffmpeg.on('close', () => {
+                resolveReject(hasMotion);
+            });
+
+            ffmpeg.on('error', () => {
+                resolveReject(false);
+            });
+
+            // Safeguard timeout
+            setTimeout(() => {
+                ffmpeg.kill();
+                resolveReject(false);
+            }, 2500);
+        });
+    } catch (err) {
+        return false;
+    }
+}
+
 export async function detectCameraMovement(cameraKey: string): Promise<void> {
     const cameraCache = deps.getCameraCache();
     const { movementDetectionStatus, cameraEntry } = cameraCache[cameraKey];
@@ -760,39 +822,66 @@ export async function detectCameraMovement(cameraKey: string): Promise<void> {
     try {
         const { current_movement_key } = movementDetectionStatus || { current_movement_key: undefined };
 
-        // Use motionUrl if provided, otherwise construct from ip/passwd
-        const apiUrl = motionUrl || `http://${ip}/api.cgi?cmd=GetMdState&user=admin&password=${passwd}`;
+        let hasMovement = false;
+        let usedServerSide = false;
 
-        // Fetch with timeout
-        const fetchAndReadPromise = (async () => {
-            const response = await fetch(apiUrl);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        if (motionUrl === 'server') {
+            hasMovement = await detectServerSideMovement(cameraEntry);
+            usedServerSide = true;
+            deps.logger.debug('detectCameraMovement: server-side result', {
+                camera: cameraEntry.name,
+                state: hasMovement ? 'MOVEMENT' : 'NO_MOVEMENT'
+            });
+        } else {
+            try {
+                // Use motionUrl if provided, otherwise construct from ip/passwd
+                const apiUrl = motionUrl || `http://${ip}/api.cgi?cmd=GetMdState&user=admin&password=${passwd}`;
+
+                // Fetch with timeout
+                const fetchAndReadPromise = (async () => {
+                    const response = await fetch(apiUrl);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return await response.text();
+                })();
+
+                const timeoutPromise = new Promise<string>((_, reject) =>
+                    setTimeout(() => reject(new Error('Request timeout after 5000ms')), 5000)
+                );
+
+                const body_json = await Promise.race([fetchAndReadPromise, timeoutPromise]);
+
+                // Parse the JSON response
+                const body = JSON.parse(body_json);
+                const movementState = body[0]?.value?.state;
+
+                if (body[0]?.error) {
+                    throw new Error(`detectCameraMovement: Camera API error: ${JSON.stringify(body[0].error)}`);
+                }
+
+                hasMovement = movementState === 1;
+
+                deps.logger.debug('detectCameraMovement: API result', {
+                    camera: cameraEntry.name,
+                    state: hasMovement ? 'MOVEMENT' : 'NO_MOVEMENT',
+                    rawState: movementState
+                });
+            } catch (fetchErr) {
+                // FALLBACK: If HTTP motion API fails or is not supported (e.g. V380 camera),
+                // automatically fall back to server-side FFmpeg scene-change motion detection!
+                deps.logger.debug('detectCameraMovement: HTTP API failed or not supported, falling back to server-side FFmpeg scene detection', {
+                    camera: cameraEntry.name,
+                    error: String(fetchErr)
+                });
+                hasMovement = await detectServerSideMovement(cameraEntry);
+                usedServerSide = true;
+                deps.logger.debug('detectCameraMovement: server-side fallback result', {
+                    camera: cameraEntry.name,
+                    state: hasMovement ? 'MOVEMENT' : 'NO_MOVEMENT'
+                });
             }
-            return await response.text();
-        })();
-
-        const timeoutPromise = new Promise<string>((_, reject) =>
-            setTimeout(() => reject(new Error('Request timeout after 5000ms')), 5000)
-        );
-
-        const body_json = await Promise.race([fetchAndReadPromise, timeoutPromise]);
-
-        // Parse the JSON response
-        const body = JSON.parse(body_json);
-        const movementState = body[0]?.value?.state;
-
-        deps.logger.debug('detectCameraMovement: API result', {
-            camera: cameraEntry.name,
-            state: movementState === 1 ? 'MOVEMENT' : 'NO_MOVEMENT',
-            rawState: movementState
-        });
-
-        if (body[0]?.error) {
-            throw new Error(`detectCameraMovement: Camera API error: ${JSON.stringify(body[0].error)}`);
         }
-
-        const hasMovement = movementState === 1;
 
         if (hasMovement) {
             metrics.movementDetectionApiCalls.inc({ camera: cameraEntry.name, result: 'detected' });
@@ -801,15 +890,31 @@ export async function detectCameraMovement(cameraKey: string): Promise<void> {
             metrics.movementDetectionApiCalls.inc({ camera: cameraEntry.name, result: 'none' });
             await handleNoMovement(cameraKey, current_movement_key, cameraEntry, movementDetectionStatus, control);
         }
-
     } catch (error) {
         const filtersensitive = passwd && passwd.length > 0
             ? String(error).replace(new RegExp(passwd.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '****')
             : String(error);
-        deps.logger.error('detectCameraMovement failed', {
-            camera: cameraEntry.name,
-            error: filtersensitive
-        });
+
+        const isNetworkError = 
+            error instanceof TypeError ||
+            filtersensitive.includes('fetch failed') ||
+            filtersensitive.includes('timeout') ||
+            filtersensitive.includes('ECONNREFUSED') ||
+            filtersensitive.includes('ENOTFOUND') ||
+            filtersensitive.includes('EHOSTUNREACH') ||
+            filtersensitive.includes('ETIMEDOUT');
+
+        if (isNetworkError) {
+            deps.logger.warn('detectCameraMovement: Camera unreachable (network error)', {
+                camera: cameraEntry.name,
+                error: filtersensitive
+            });
+        } else {
+            deps.logger.error('detectCameraMovement failed', {
+                camera: cameraEntry.name,
+                error: filtersensitive
+            });
+        }
         metrics.movementDetectionApiCalls.inc({ camera: cameraEntry.name, result: 'error' });
 
         deps.setCameraCache(cameraKey, {

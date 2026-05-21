@@ -33,6 +33,7 @@ export function CameraCard({
 }: CameraCardProps) {
   const [hasError, setHasError] = useState(false);
   const [isDragTarget, setIsDragTarget] = useState(false);
+  const [isLiveAIEnabled, setIsLiveAIEnabled] = useState(false);
 
   const handleError = useCallback(() => {
     setHasError(true);
@@ -236,6 +237,7 @@ export function CameraCard({
           autoPlay
           muted
           onError={handleError}
+          enableLiveAI={isLiveAIEnabled}
         />
       ) : (
         <Box
@@ -270,9 +272,45 @@ export function CameraCard({
         justifyContent="space-between"
         zIndex={20}
       >
-        <Text fontSize="sm" fontWeight="medium" color="white" lineClamp={1}>
-          {camera.name}
-        </Text>
+        <HStack gap={3} maxW="70%">
+          <Text fontSize="sm" fontWeight="medium" color="white" lineClamp={1}>
+            {camera.name}
+          </Text>
+          {camera.enable_streaming && !hasError && (
+            <Box
+              as="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsLiveAIEnabled(!isLiveAIEnabled);
+              }}
+              px={2.5}
+              py={0.5}
+              borderRadius="full"
+              fontSize="2xs"
+              fontWeight="bold"
+              bg={isLiveAIEnabled ? 'purple.600' : 'rgba(255,255,255,0.15)'}
+              color="white"
+              _hover={{ bg: isLiveAIEnabled ? 'purple.500' : 'rgba(255,255,255,0.25)' }}
+              transition="all 0.15s ease"
+              display="flex"
+              alignItems="center"
+              gap={1.5}
+              border="1px solid"
+              borderColor={isLiveAIEnabled ? 'purple.400' : 'rgba(255,255,255,0.1)'}
+            >
+              <Box 
+                w={1.5} 
+                h={1.5} 
+                borderRadius="full" 
+                bg={isLiveAIEnabled ? 'purple.200' : 'gray.400'} 
+                style={{
+                  animation: isLiveAIEnabled ? 'pulse 1.5s infinite alternate' : 'none'
+                }}
+              />
+              Live AI
+            </Box>
+          )}
+        </HStack>
         <StatusBadge
           status={camera.enable_streaming && !hasError ? 'online' : 'offline'}
         />

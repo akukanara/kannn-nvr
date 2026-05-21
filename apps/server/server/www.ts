@@ -719,8 +719,19 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
             if (ctx.request.body) {
                 const new_settings: Settings = ctx.request.body as Settings;
                 try {
-                    const dirchk = await fs.stat(new_settings.disk_base_dir);
-                    if (!dirchk.isDirectory()) throw new Error(`${new_settings.disk_base_dir} is not a directory`);
+                    if (new_settings.disk_base_dir) {
+                        try {
+                            const dirchk = await fs.stat(new_settings.disk_base_dir);
+                            if (!dirchk.isDirectory()) throw new Error(`${new_settings.disk_base_dir} is not a directory`);
+                        } catch (e: any) {
+                            if (e.code === 'ENOENT') {
+                                // Create directory if it doesn't exist
+                                await fs.mkdir(new_settings.disk_base_dir, { recursive: true });
+                            } else {
+                                throw e;
+                            }
+                        }
+                    }
                     await settingsdb.put('config', new_settings);
                     const currentCache = getSettingsCache();
                     setSettingsCache({

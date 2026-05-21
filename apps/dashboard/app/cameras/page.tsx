@@ -544,6 +544,7 @@ export default function CamerasPage() {
                       checked={formValues.enable_streaming || false}
                       onCheckedChange={(e) => handleInputChange('enable_streaming', e.checked)}
                     >
+                      <Switch.HiddenInput />
                       <Switch.Control>
                         <Switch.Thumb />
                       </Switch.Control>
@@ -597,6 +598,7 @@ export default function CamerasPage() {
                       checked={formValues.enable_movement || false}
                       onCheckedChange={(e) => handleInputChange('enable_movement', e.checked)}
                     >
+                      <Switch.HiddenInput />
                       <Switch.Control>
                         <Switch.Thumb />
                       </Switch.Control>

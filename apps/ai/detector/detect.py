@@ -1,4 +1,5 @@
 import os
+# pyrefly: ignore [missing-import]
 import cv2
 import sys
 import argparse
@@ -11,6 +12,7 @@ import json
 #sys.path.append(os.path.join(realpath[0]+_sep, *realpath[1:realpath.index('rknn_model_zoo')+1]))
 
 from py_utils.coco_utils import COCO_test_helper
+# pyrefly: ignore [missing-import]
 import numpy as np
 
 
@@ -153,7 +155,11 @@ def setup_model(args):
         model = Torch_model_container(args.model_path)
     elif model_path.endswith('.rknn'):
         platform = 'rknn'
-        from py_utils.rknn_executor import RKNN_model_container 
+        try:
+            from py_utils.rknn_executor import RKNN_model_container
+        except (ImportError, ModuleNotFoundError):
+            print("ERROR: RKNN Toolkit 2 is not installed or not supported on this platform. RKNN model inference is not available.", file=sys.stderr)
+            sys.exit(1)
         model = RKNN_model_container(args.model_path, args.target, args.device_id)
     elif model_path.endswith('onnx'):
         platform = 'onnx'

@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+detector/__init__.py
+detector/detect.py
+detector/detect_stub.py
+detector/shapes_helper.py
+open_source_nvr_detector.egg-info/PKG-INFO
+open_source_nvr_detector.egg-info/SOURCES.txt
+open_source_nvr_detector.egg-info/dependency_links.txt
+open_source_nvr_detector.egg-info/entry_points.txt
+open_source_nvr_detector.egg-info/requires.txt
+open_source_nvr_detector.egg-info/top_level.txt
+py_utils/__init__.py
+py_utils/coco_utils.py
+py_utils/onnx_executor.py
+py_utils/pytorch_executor.py
+py_utils/rknn_executor.py
