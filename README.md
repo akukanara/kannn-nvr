@@ -5,19 +5,19 @@
 
 Web application to monitor your IP Security Camera network, continuously record camera feeds to your computers harddrive, and monitor motion events through a web app. Features include:
 
-  :heavy_check_mark:  No expensive hardware required, use your old computers & harddrives \
-  :heavy_check_mark:  Supports one or multiple cameras, with single, filtered, motion list \
-  :heavy_check_mark:  No cloud account required, self-contained \
-  :heavy_check_mark:  Enhance your Cameras motion detection with Object Detection tagging/filtering \
-  :heavy_check_mark:  Continuously monitors hardrives, deleting the oldest video segments when almost full 
-
-
+  :heavy_check_mark:  **Interactive Live Preview Canvas**: Drag and drop cameras to swap feeds dynamically while keeping slot sizes completely stable, with visual gridline blueprint helpers. \
+  :heavy_check_mark:  **Premium Layout Presets**: Fast switching between beautiful pre-configured layouts: Grid 2x2, Grid 3x3, Highlight 1+5, and Cinematic Dual. \
+  :heavy_check_mark:  **Kustom Canvas Sizing**: Manually scale card column and row spans (`W+`, `W-`, `H+`, `H-`) and shift sequence positions (`◀`, `▶`) in real-time. \
+  :heavy_check_mark:  **Responsive Mobile-First Grid**: Adaptive canvas cells that collapse dynamically on smaller screens for mobile monitoring. \
+  :heavy_check_mark:  **No Cloud Account Required**: 100% self-contained, offline-first surveillance system. \
+  :heavy_check_mark:  **Smart Storage Auto-Deletion**: Continuously monitors disk space, pruning oldest video chunks to prevent drive saturation. \
+  :heavy_check_mark:  **AI Object Detection Tagging**: Supercharge motion triggers with YOLO11 object verification to eliminate false alerts from clouds or wind.
 
 <p align="center">
-  <img width="700"  src="./assets/wenui.png">
+  <img width="800" src="./assets/wenui.png" alt="NVR Surveillance Live Preview Canvas">
 </p>
 
-> **_NOTE:_** This repo was developed with Reolink POE cameras, that provided a RTMP endpoint, and a API for motion detection. But can be develoed/extended for other IP cameras
+> **_NOTE:_** This repo was developed with Reolink POE cameras, that provided a RTMP endpoint, and a API for motion detection. But can be developed/extended for other IP cameras.
 
 ### Object Detection
 
