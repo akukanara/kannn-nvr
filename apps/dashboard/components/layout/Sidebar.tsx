@@ -3,6 +3,7 @@
 import { Box, VStack, Text, HStack, Separator } from '@chakra-ui/react';
 import { NavItem } from './NavItem';
 import { useColorMode } from '@/providers/ColorModeProvider';
+import { KannnLogo } from './KannnLogo';
 
 export function Sidebar() {
   const { toggleColorMode, colorMode } = useColorMode();
@@ -24,11 +25,9 @@ export function Sidebar() {
       px={3}
       zIndex={50}
     >
-      <HStack px={4} mb={8} gap={3}>
-        <Box w={8} h={8} borderRadius="md" bg="accent.default" display="flex" alignItems="center" justifyContent="center">
-          <Text fontSize="sm" fontWeight="bold" color="white">K</Text>
-        </Box>
-        <VStack align="stretch" gap={0}>
+      <HStack px={4} mb={8} gap={3} align="center">
+        <KannnLogo w="34px" h="34px" color="accent.default" />
+        <VStack align="start" gap={0}>
           <Text fontSize="lg" fontWeight="bold" lineHeight="none" color="fg.primary">
             Kannn
           </Text>

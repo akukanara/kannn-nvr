@@ -1,5 +1,6 @@
-
-
+<p align="center">
+  <img src="./assets/logo.png" alt="Kannn NVR Logo" width="180">
+</p>
 
 # Kannn NVR
 
