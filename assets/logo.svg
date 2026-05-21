@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" width="100%" height="100%">
+  <style>
+    .brand-color {
+      fill: #1a1a1a;
+      transition: fill 0.3s ease;
+    }
+    .brand-accent {
+      fill: #0d9488; /* Sleek Teal accent color */
+    }
+    .brand-text {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-weight: 700;
+      font-size: 11.5px;
+      letter-spacing: 0.5px;
+    }
+    @media (prefers-color-scheme: dark) {
+      .brand-color {
+        fill: #f9fafb; /* Brilliant white in GitHub dark mode */
+      }
+    }
+  </style>
+
+  <defs>
+    {/* A mask to cut out a transparent hole for the lens glass */}
+    <mask id="lens-cutout">
+      <rect x="0" y="0" width="120" height="120" fill="white" />
+      <ellipse
+        cx="74.5"
+        cy="34"
+        rx="3.8"
+        ry="5.8"
+        transform="rotate(15 74.5 34)"
+        fill="black"
+      />
+    </mask>
+  </defs>
+
+  {/* Stylized K-Camera Icon */}
+  <g mask="url(#lens-cutout)">
+    {/* Main K Stem and Bottom Leg */}
+    <path
+      d="M36 20H28C22 20 20 22 20 28V70H36V48L55 70H74L45 44L36 36V20Z"
+      class="brand-color"
+    />
+    
+    {/* Camera Body / Upper Arm */}
+    <path
+      d="M36 40L72 26.5C77 25 80.5 28 80.5 32C80.5 33 80 34 79 35C74 38 68 40.5 61 42L36 47V40Z"
+      class="brand-color"
+    />
+
+    {/* Camera Lens Bezel */}
+    <ellipse
+      cx="74.5"
+      cy="34"
+      rx="5"
+      ry="7.5"
+      transform="rotate(15 74.5 34)"
+      class="brand-color"
+    />
+  </g>
+
+  {/* Camera Lens Center Iris */}
+  <circle
+    cx="74"
+    cy="34"
+    r="2.2"
+    class="brand-color"
+  />
+
+  {/* Lens Reflection Highlight (White Shine) */}
+  <circle
+    cx="72.8"
+    cy="32.8"
+    r="0.8"
+    fill="#ffffff"
+  />
+
+  {/* "Kannn NVR" Typography underneath the icon */}
+  <text x="50%" y="100" text-anchor="middle" class="brand-color brand-text">Kannn NVR</text>
+</svg>
