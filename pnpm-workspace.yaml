@@ -1,0 +1,6 @@
+packages:
+  - "apps/*"
+allowBuilds:
+  classic-level: true
+  esbuild: true
+  sharp: true

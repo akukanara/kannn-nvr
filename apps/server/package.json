@@ -1,0 +1,32 @@
+{
+  "name": "@nvr/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "server": "node lib/server/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@koa/router": "^14.0.0",
+    "avsc": "^5.7.3",
+    "koa": "^3.1.1",
+    "koa-bodyparser": "^4.3.0",
+    "koa-send": "^5.0.1",
+    "level": "^10.0.0",
+    "prom-client": "^15.1.3",
+    "winston": "^3.18.3"
+  },
+  "devDependencies": {
+    "@types/koa__router": "^12.0.5",
+    "@types/koa-bodyparser": "^4.3.5",
+    "@types/level": "^6.0.0",
+    "@types/node": "^24.10.3",
+    "@vitest/coverage-v8": "^4.0.15",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  }
+}

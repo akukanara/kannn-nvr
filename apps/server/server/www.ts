@@ -17,6 +17,134 @@ import { sseManager, formatMovementForSSE } from './sse-manager.js';
 import { diskCheck, catalogVideo, DiskCheckReturn } from './diskcheck.js';
 import type { Logger } from 'winston';
 import { registry } from './metrics.js';
+import crypto from 'crypto';
+
+export const FFMPEG_CMD = process.platform === 'win32' ? 'ffmpeg' : '/usr/bin/ffmpeg';
+
+// ONVIF Soap Helpers
+function generateWSSecurityHeader(username?: string, password?: string): string {
+    if (!username) return '';
+
+    const nonce = crypto.randomBytes(16);
+    const nonceBase64 = nonce.toString('base64');
+    const created = new Date().toISOString();
+    
+    let passwordDigest = '';
+    if (password) {
+        const hasher = crypto.createHash('sha1');
+        hasher.update(nonce);
+        hasher.update(Buffer.from(created, 'ascii'));
+        hasher.update(Buffer.from(password, 'utf8'));
+        passwordDigest = hasher.digest('base64');
+    }
+
+    return `
+    <Security s:mustUnderstand="1" xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+      <UsernameToken>
+        <Username>${username}</Username>
+        <Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">${passwordDigest}</Password>
+        <Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">${nonceBase64}</Nonce>
+        <wsu:Created>${created}</wsu:Created>
+      </UsernameToken>
+    </Security>`;
+}
+
+function buildSOAPEnvelope(body: string, securityHeader: string = ''): string {
+    return `<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl" xmlns:tt="http://www.onvif.org/ver10/schema">
+  <s:Header>
+    ${securityHeader}
+  </s:Header>
+  <s:Body>
+    ${body}
+  </s:Body>
+</s:Envelope>`;
+}
+
+const getProfilesBody = `<trt:GetProfiles/>`;
+
+const getStreamUriBody = (profileToken: string) => `
+    <trt:GetStreamUri>
+      <trt:StreamSetup>
+        <tt:Stream>RTP-Unicast</tt:Stream>
+        <tt:Transport>
+          <tt:Protocol>RTSP</tt:Protocol>
+        </tt:Transport>
+      </trt:StreamSetup>
+      <trt:ProfileToken>${profileToken}</trt:ProfileToken>
+    </trt:GetStreamUri>`;
+
+async function postONVIF(url: string, body: string, timeoutMs: number = 3000): Promise<string> {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/soap+xml; charset=utf-8',
+            },
+            body,
+            signal: controller.signal,
+        });
+        clearTimeout(id);
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+        }
+        return await res.text();
+    } catch (e: any) {
+        clearTimeout(id);
+        if (e.name === 'AbortError') {
+            throw new Error(`Connection timed out (${timeoutMs}ms)`);
+        }
+        throw e;
+    }
+}
+
+async function probeONVIF(ip: string, username?: string, password?: string, logger?: any): Promise<{ streamUri: string; profile: string; port: number }> {
+    const ports = [80, 8899, 8080, 5000];
+    let lastError: Error | null = null;
+
+    for (const port of ports) {
+        const url = `http://${ip}:${port}/onvif/device_service`;
+        if (logger) logger.info('Probing ONVIF service', { url });
+
+        try {
+            const secHeader = generateWSSecurityHeader(username, password);
+            const soapBody = buildSOAPEnvelope(getProfilesBody, secHeader);
+            const responseText = await postONVIF(url, soapBody, 2000);
+
+            const profileRegex = /token="([^"]+)"/g;
+            const matches = [...responseText.matchAll(profileRegex)];
+            if (matches.length === 0) {
+                throw new Error('No media profiles found in ONVIF response');
+            }
+
+            const profileToken = matches[0][1];
+            if (logger) logger.info('ONVIF Profile discovered', { profileToken, port });
+
+            const streamUriSoap = buildSOAPEnvelope(getStreamUriBody(profileToken), secHeader);
+            const streamUriResponse = await postONVIF(url, streamUriSoap, 2000);
+
+            const uriRegex = /<tt:Uri>([^<]+)<\/tt:Uri>/;
+            const uriMatch = streamUriResponse.match(uriRegex);
+            if (!uriMatch) {
+                const altUriRegex = /:Uri>([^<]+)<\//;
+                const altMatch = streamUriResponse.match(altUriRegex);
+                if (!altMatch) {
+                    throw new Error('RTSP Uri not found in GetStreamUri response');
+                }
+                return { streamUri: altMatch[1].trim(), profile: profileToken, port };
+            }
+
+            return { streamUri: uriMatch[1].trim(), profile: profileToken, port };
+        } catch (e) {
+            if (logger) logger.warn('ONVIF port probe failed', { port, error: String(e) });
+            lastError = e as Error;
+        }
+    }
+
+    throw lastError || new Error('ONVIF services could not be discovered');
+}
 
 // Types
 export interface Settings {
@@ -139,6 +267,13 @@ export interface CameraEntry {
     secMovementStartupDelay?: number;
     /** Processing pointer - last movement key that was processed for this camera (state, not config) */
     state_lastProcessedMovementKey?: string;
+    /**
+     * Optional audio codec for ffmpeg output. Can be:
+     * - 'copy': Copy audio stream directly (default, high performance but needs ADTS format)
+     * - 'aac': Transcode to AAC (low CPU usage, solves ADTS format mismatch errors)
+     * - 'none': Disable audio stream entirely (reduces network/storage overhead)
+     */
+    ffmpegAudioCodec?: 'copy' | 'aac' | 'none';
 }
 
 export interface CameraEntryClient extends Omit<CameraEntry, 'ip' | 'passwd'> {
@@ -212,7 +347,7 @@ async function ensureDir(folder: string): Promise<boolean> {
     } catch (e: any) {
         if (e.code === 'ENOENT') {
             try {
-                await fs.mkdir(folder);
+                await fs.mkdir(folder, { recursive: true });
                 return true;
             } catch (mkdirError) {
                 throw new Error(`Cannot create ${folder}: ${mkdirError}`);
@@ -312,22 +447,36 @@ export async function initWeb(deps: WebServerDependencies, port: number = 8080):
             try {
                 const m: MovementEntry = await movementdb.get(encodeMovementKey(parseInt(moment)));
                 if (!m) {
-                    ctx.throw(404, `Movement not found: ${moment}`);
+                    ctx.status = 404;
+                    ctx.body = `Movement not found: ${moment}`;
                     return;
                 }
                 const c: CameraEntry = await cameradb.get(m.cameraKey);
                 if (!c) {
-                    ctx.throw(404, `Camera not found: ${m.cameraKey}`);
+                    ctx.status = 404;
+                    ctx.body = `Camera not found: ${m.cameraKey}`;
                     return;
                 }
                 const hasDetections = m.detection_output?.tags && m.detection_output.tags.length > 0;
                 const serve = `${c.disk}/${c.folder}/${hasDetections ? 'mlimage' : 'image'}${moment}.jpg`;
-                await fs.stat(serve);
+                
+                try {
+                    await fs.stat(serve);
+                } catch (statError: any) {
+                    if (statError.code === 'ENOENT') {
+                        ctx.status = 404;
+                        ctx.body = 'Image file not found';
+                        return;
+                    }
+                    throw statError;
+                }
+                
                 ctx.set('content-type', 'image/jpeg');
                 ctx.body = createReadStream(serve, { encoding: undefined });
-            } catch (e) {
-                const err: Error = e as Error;
-                ctx.throw(400, err.message);
+            } catch (e: any) {
+                logger.error('Error serving movement image', { moment, error: e.message });
+                ctx.status = 500;
+                ctx.body = `Internal server error: ${e.message}`;
             }
         })
         .get('/frame/:moment/:filename', async (ctx) => {
@@ -337,18 +486,31 @@ export async function initWeb(deps: WebServerDependencies, port: number = 8080):
             try {
                 const m: MovementEntry = await movementdb.get(encodeMovementKey(parseInt(moment)));
                 if (!m) {
-                    ctx.throw(404, `Movement not found: ${moment}`);
+                    ctx.status = 404;
+                    ctx.body = `Movement not found: ${moment}`;
                     return;
                 }
                 const { disk, folder } = cameraCache[m.cameraKey].cameraEntry;
                 const framesPath = getFramesPath(getSettingsCache().settings, disk, folder);
                 const serve = `${framesPath}/${filename}`;
-                await fs.stat(serve);
+                
+                try {
+                    await fs.stat(serve);
+                } catch (statError: any) {
+                    if (statError.code === 'ENOENT') {
+                        ctx.status = 404;
+                        ctx.body = 'Frame file not found';
+                        return;
+                    }
+                    throw statError;
+                }
+
                 ctx.set('content-type', 'image/jpeg');
                 ctx.body = createReadStream(serve, { encoding: undefined });
-            } catch (e) {
-                const err: Error = e as Error;
-                ctx.throw(400, err.message);
+            } catch (e: any) {
+                logger.error('Error serving frame', { moment, filename, error: e.message });
+                ctx.status = 500;
+                ctx.body = `Internal server error: ${e.message}`;
             }
         })
         .get('/video/live/:cameraKey/:file', async (ctx) => {
@@ -358,24 +520,38 @@ export async function initWeb(deps: WebServerDependencies, port: number = 8080):
             try {
                 const c = await cameradb.get(cameraKey);
                 if (!c) {
-                    ctx.throw(404, `Camera not found: ${cameraKey}`);
+                    ctx.status = 404;
+                    ctx.body = `Camera not found: ${cameraKey}`;
                     return;
                 }
                 const serve = `${c.disk}/${c.folder}/${file}`;
-                await fs.stat(serve);
+                
+                try {
+                    await fs.stat(serve);
+                } catch (statError: any) {
+                    if (statError.code === 'ENOENT') {
+                        ctx.status = 404;
+                        ctx.body = `File not found: ${file}`;
+                        return;
+                    }
+                    throw statError;
+                }
 
                 if (file.endsWith('.m3u8')) {
                     ctx.set('content-type', 'application/x-mpegURL');
                 } else if (file.endsWith('.ts')) {
                     ctx.set('content-type', 'video/MP2T');
                 } else {
-                    ctx.throw(400, `unknown file=${file}`);
+                    ctx.status = 400;
+                    ctx.body = `unknown file=${file}`;
+                    return;
                 }
 
                 ctx.body = createReadStream(serve);
-            } catch (e) {
-                const err: Error = e as Error;
-                ctx.throw(400, err.message);
+            } catch (e: any) {
+                logger.error('Error serving live video', { cameraKey, file, error: e.message });
+                ctx.status = 500;
+                ctx.body = `Internal server error: ${e.message}`;
             }
         })
         .get('/video/:startSegment/:seconds/:cameraKey/:file', async (ctx) => {
@@ -390,7 +566,9 @@ export async function initWeb(deps: WebServerDependencies, port: number = 8080):
                 const segmentInt = parseInt(startSegment);
                 const secondsInt = parseInt(seconds);
                 if (isNaN(segmentInt) || isNaN(secondsInt)) {
-                    ctx.throw(400, `message=${startSegment} or ${seconds} not valid values`);
+                    ctx.status = 400;
+                    ctx.body = `Invalid startSegment or seconds: ${startSegment}, ${seconds}`;
+                    return;
                 } else {
                     const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : 0;
                     const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : 0;
@@ -423,15 +601,15 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                     await fs.stat(serve);
                     ctx.set('content-type', 'video/MP2T');
                     ctx.body = createReadStream(serve);
-                } catch (e) {
-                    const err: Error = e as Error;
+                } catch (e: any) {
                     logger.warn('Video segment not found', {
                         file,
                         path: serve,
                         cameraKey,
-                        error: err.message
+                        error: e.message
                     });
-                    ctx.throw(404, `Segment not found: ${file}`);
+                    ctx.status = 404;
+                    ctx.body = `Segment not found: ${file}`;
                 }
             } else {
                 ctx.throw(400, `unknown file=${file}`);
@@ -456,7 +634,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
 
                 const result = await runProcess({
                     name: `mp4-gen-${cameraKey}-${startSegment}`,
-                    cmd: '/usr/bin/ffmpeg',
+                    cmd: FFMPEG_CMD,
                     args: ['-y', '-i', `http://127.0.0.1:${port}/video/${startSegment}/${seconds}/${cameraKey}/stream.m3u8${qs ? `?${qs}` : ''}`, '-c', 'copy', serve],
                     timeout: 50000
                 });
@@ -478,6 +656,64 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
         });
 
     const api = new Router({ prefix: '/api' })
+        .post('/onvif/probe', async (ctx) => {
+            const { ip, username, password } = ctx.request.body as any;
+            if (!ip) {
+                ctx.status = 400;
+                ctx.body = { error: 'IP address is required' };
+                return;
+            }
+
+            try {
+                const result = await probeONVIF(ip, username, password, logger);
+                ctx.body = result;
+            } catch (e) {
+                logger.error('ONVIF probe failed completely', { ip, error: String(e) });
+                ctx.status = 400;
+                ctx.body = { error: String(e) };
+            }
+        })
+        .get('/cameras', async (ctx) => {
+            try {
+                const cameras: { [key: string]: CameraEntry } = {};
+                for (const [key, value] of Object.entries(cameraCache)) {
+                    if (!value.cameraEntry.delete) {
+                        cameras[key] = value.cameraEntry;
+                    }
+                }
+                ctx.body = cameras;
+            } catch (e) {
+                logger.error('Error fetching cameras', { error: String(e) });
+                ctx.body = { error: String(e) };
+                ctx.status = 500;
+            }
+        })
+        .get('/recordings', async (ctx) => {
+            const cameraKey = ctx.query['cameraKey'] as string;
+            if (!cameraKey) {
+                ctx.status = 400;
+                ctx.body = { error: 'cameraKey query parameter is required' };
+                return;
+            }
+            try {
+                const c = cameraCache[cameraKey]?.cameraEntry;
+                if (!c) {
+                    ctx.status = 404;
+                    ctx.body = { error: `Camera not found: ${cameraKey}` };
+                    return;
+                }
+                const folder = `${c.disk}/${c.folder}`;
+                const recordings = await catalogVideo(folder);
+                ctx.body = recordings;
+            } catch (e) {
+                logger.error('Error fetching recordings', { cameraKey, error: String(e) });
+                ctx.status = 500;
+                ctx.body = { error: String(e) };
+            }
+        })
+        .get('/settings', (ctx) => {
+            ctx.body = getSettingsCache().settings;
+        })
         .post('/settings', async (ctx) => {
             logger.info('Settings save', { settings: ctx.request.body });
             if (ctx.request.body) {
@@ -672,6 +908,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
             logger.info('Camera save', { cameraKey, deleteOption, camera: ctx.request.body });
             if (ctx.request.body) {
                 const new_ce: CameraEntry = ctx.request.body as CameraEntry;
+                new_ce.disk = new_ce.disk || getSettingsCache().settings.disk_base_dir || '/recordings';
                 const folder = `${new_ce.disk}/${new_ce.folder}`;
                 
                 if (cameraKey === 'new') {
@@ -685,7 +922,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                             state_lastProcessedMovementKey: '0'  // Start from beginning
                         };
                         await cameradb.put(new_key, newCamera);
-                        cameraCache[new_key] = { cameraEntry: new_ce };
+                        cameraCache[new_key] = { cameraEntry: newCamera };
                         ctx.status = 201;
                     } catch (e) {
                         ctx.throw(400, e as Error);
@@ -769,7 +1006,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                                 logger.info('Resetting camera recordings', { cameraKey });
                                 const currentSettings = getSettingsCache();
                                 const diskres = await clearDownDisk(
-                                    currentSettings.settings.disk_base_dir,
+                                    currentSettings.settings.disk_base_dir || '/recordings',
                                     [cameraKey],
                                     -1,
                                     cameraCache,
@@ -798,7 +1035,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                             } else if (deleteOption === 'delall') {
                                 const currentSettings = getSettingsCache();
                                 const diskres = await clearDownDisk(
-                                    currentSettings.settings.disk_base_dir,
+                                    currentSettings.settings.disk_base_dir || '/recordings',
                                     [cameraKey],
                                     -1,
                                     cameraCache,

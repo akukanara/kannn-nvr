@@ -35,7 +35,7 @@ import type {
     MovementEntry,
     MLTag
 } from './www.js';
-import { encodeMovementKey, MOVEMENT_KEY_EPOCH, ensureDir, getFramesPath } from './www.js';
+import { encodeMovementKey, MOVEMENT_KEY_EPOCH, ensureDir, getFramesPath, FFMPEG_CMD } from './www.js';
 
 // ============================================================================
 // In-Memory State (prefixed with _inmem for clarity per requirements)
@@ -423,7 +423,7 @@ export async function controllerDetector(): Promise<void> {
 
             const newProcess = spawnProcess({
                 name: 'ML-Detection',
-                cmd: 'python3',
+                cmd: process.platform === 'win32' ? 'python' : 'python3',
                 args: cmdArgs,
                 cwd: aiDir,
                 onStdout: mlProcessor.processStdout,
@@ -555,13 +555,22 @@ export async function controllerFFmpeg(
             cmdArgs.push('-rtsp_transport', 'tcp', '-reorder_queue_size', '500', '-max_delay', '500000');
         }
         
+        const audioArgs: string[] = [];
+        if (cameraEntry.ffmpegAudioCodec === 'none') {
+            audioArgs.push('-an');
+        } else if (cameraEntry.ffmpegAudioCodec === 'aac') {
+            audioArgs.push('-acodec', 'aac');
+        } else {
+            audioArgs.push('-acodec', 'copy');
+        }
+
         cmdArgs.push(
             '-i', streamSource,
             '-hide_banner',
             '-loglevel', 'error',
             '-fflags', '+genpts',
             '-vcodec', 'copy',
-            '-acodec', 'copy',
+            ...audioArgs,
             '-f', 'hls',
             '-hls_time', '2',
             '-hls_list_size', '5',
@@ -572,7 +581,7 @@ export async function controllerFFmpeg(
 
         const childProcess = spawnProcess({
             name,
-            cmd: '/usr/bin/ffmpeg',
+            cmd: FFMPEG_CMD,
             args: cmdArgs,
             captureOutput: true,
             onStderr: (data: string) => {
@@ -794,7 +803,9 @@ export async function detectCameraMovement(cameraKey: string): Promise<void> {
         }
 
     } catch (error) {
-        const filtersensitive = String(error).replace(new RegExp(passwd || '', 'g'), '****');
+        const filtersensitive = passwd && passwd.length > 0
+            ? String(error).replace(new RegExp(passwd.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), '****')
+            : String(error);
         deps.logger.error('detectCameraMovement failed', {
             camera: cameraEntry.name,
             error: filtersensitive
@@ -1330,7 +1341,7 @@ export async function triggerProcessMovement(cameraKey: string): Promise<void> {
     // Spawn ffmpeg
     const ffmpeg = spawnProcess({
         name: `ffmpeg-${cameraEntry.name}-mov${movement_key}`,
-        cmd: '/usr/bin/ffmpeg',
+        cmd: FFMPEG_CMD,
         args: ffmpegArgs,
         onStdout: frameProcessor.processStdout,
         onStderr: frameProcessor.processStderr,

@@ -5,6 +5,45 @@ import { spawn } from 'child_process'
 
 async function runDF(folder: string): Promise<{device: string, sizeKB: number, usedKB: number, avaiableKB: number, pecentUsed: number}> {
 
+    if (process.platform === 'win32') {
+        return new Promise((acc) => {
+            let drive = 'C';
+            const match = folder.match(/^([a-zA-Z]):/);
+            if (match) {
+                drive = match[1];
+            } else {
+                const cwdMatch = process.cwd().match(/^([a-zA-Z]):/);
+                if (cwdMatch) {
+                    drive = cwdMatch[1];
+                }
+            }
+
+            const powershell_task = spawn('powershell', ['-Command', `(Get-Volume ${drive}).Size, (Get-Volume ${drive}).SizeRemaining`], { timeout: 5000 });
+            let stdout = '', stderr = '';
+            powershell_task.stdout.on('data', (data: string) => { stdout += data; });
+            powershell_task.stderr.on('data', (data: string) => { stderr += data; });
+            powershell_task.on('close', (code: number) => {
+                if (code === 0) {
+                    const parts = stdout.trim().split(/\r?\n/).map(x => parseInt(x, 10));
+                    if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                        const totalBytes = parts[0];
+                        const freeBytes = parts[1];
+                        const sizeKB = Math.ceil(totalBytes / 1024);
+                        const avaiableKB = Math.ceil(freeBytes / 1024);
+                        const usedKB = sizeKB - avaiableKB;
+                        const pecentUsed = Math.round((usedKB / sizeKB) * 100);
+                        acc({ device: `${drive}:`, sizeKB, usedKB, avaiableKB, pecentUsed });
+                        return;
+                    }
+                }
+                acc({ device: 'fallback', sizeKB: 100000000, usedKB: 50000000, avaiableKB: 50000000, pecentUsed: 50 });
+            });
+            powershell_task.on('error', () => {
+                acc({ device: 'fallback', sizeKB: 100000000, usedKB: 50000000, avaiableKB: 50000000, pecentUsed: 50 });
+            });
+        });
+    }
+
     return new Promise((acc,rej) => {
         let mv_stdout = '', mv_stderr = '', mv_error = ''
         const mv_task = spawn('df', ['-Pk', folder], { timeout: 5000 })
@@ -27,6 +66,36 @@ async function runDF(folder: string): Promise<{device: string, sizeKB: number, u
 
 
 async function lsOrderTime(folder: string): Promise<Array<[size: number, filename: string]>> {
+
+    if (process.platform === 'win32') {
+        try {
+            const files = await fs.readdir(folder);
+            const fileStats = await Promise.all(
+                files.map(async (file) => {
+                    try {
+                        const filePath = `${folder}/${file}`;
+                        const s = await stat(filePath);
+                        return {
+                            file,
+                            time: s.mtimeMs,
+                            size: Math.ceil(s.size / 1024)
+                        };
+                    } catch {
+                        return null;
+                    }
+                })
+            );
+            
+            const sorted = fileStats
+                .filter((item): item is { file: string; time: number; size: number } => item !== null)
+                .sort((a, b) => a.time - b.time)
+                .map((item): [number, string] => [item.size, item.file]);
+                
+            return sorted;
+        } catch (e) {
+            throw e;
+        }
+    }
 
     return new Promise((acc,rej) => {
         let mv_stdout = '', mv_stderr = '', mv_error = ''
