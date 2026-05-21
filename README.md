@@ -17,25 +17,37 @@ Web application to monitor your IP Security Camera network, continuously record 
   :heavy_check_mark:  **AI Object Detection Tagging**: Supercharge motion triggers with YOLO11 object verification to eliminate false alerts from clouds or wind.
 
 <p align="center">
-  <img width="800" src="./assets/wenui.png" alt="NVR Surveillance Live Preview Canvas">
+  <img width="800" src="./assets/wenui.png" alt="Kannn NVR Live Preview Canvas">
 </p>
 
 > **_NOTE:_** This repo was developed with Reolink POE cameras, that provided a RTMP endpoint, and a API for motion detection. But can be developed/extended for other IP cameras.
 
-### Object Detection
+### 🎥 Unified 24-Hour Playback Timeline
+
+Review recorded footage seamlessly using the professional 24-hour continuous timeline ruler. Visualize recorded segments, jump directly to active motion triggers, and playback files in a unified, modern interface.
+
+<p align="center">
+  <img width="800" src="./assets/playback.png" alt="Kannn NVR Playback Timeline">
+</p>
+
+### 🔍 Object Detection
 
 In addition, if your cameras motion sensor triggers a detection, the app will take a still of the detection, and run a Object Detection process, to tag the still with the objects in the picture.  You can then use these tags to filter and review your motion events.  This is very useful to avoid false positives, like the sun going behind a cloud, or a rain shower.
 
 <p align="center">
-  <img width="450"  src="./assets/objectdetection.png">
+  <img width="450"  src="./assets/objectdetection.png" alt="Kannn NVR Object Detection Tagging">
 </p>
 
-### Settings
+### 🛠️ Settings & Camera Management
 
-Using the settings menu, you first select the disk you will be using to stream real-time video from the cameras, and if you want to use the auto-deletion featre to prevent the disk from filling up, then if you want to use the object detection feature. Then you can add your cameras
+Add, configure, and monitor your connected IP security cameras. View real-time streaming and motion detection status indicator lights instantly, and configure disk storage capacity limits alongside YOLO object detection parameters.
 
 <p align="center">
-  <img width="250"  src="./assets/settings1a.png"> <img width="250"   src="./assets/settings2a.png"> 
+  <img width="800" src="./assets/cameras.png" alt="Kannn NVR Camera Management">
+</p>
+
+<p align="center">
+  <img width="800" src="./assets/settings.png" alt="Kannn NVR Settings">
 </p>
 
 <br clear="both"/>
