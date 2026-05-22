@@ -12,6 +12,7 @@ interface PlaybackPlayerProps {
   onError?: (error: Error) => void;
   onTimeUpdate?: (currentTimeSec: number) => void;
   onLoadedMetadata?: (durationSec: number) => void;
+  enableLiveAIByDefault?: boolean;
 }
 
 export function PlaybackPlayer({
@@ -21,12 +22,13 @@ export function PlaybackPlayer({
   onError,
   onTimeUpdate,
   onLoadedMetadata,
+  enableLiveAIByDefault = true,
 }: PlaybackPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hlsRef = useRef<Hls | null>(null);
 
-  const [isLiveAIEnabled, setIsLiveAIEnabled] = useState(false);
+  const [isLiveAIEnabled, setIsLiveAIEnabled] = useState(enableLiveAIByDefault);
   const [aiStatus, setAiStatus] = useState<string>('');
   const [modelLoaded, setModelLoaded] = useState(false);
 

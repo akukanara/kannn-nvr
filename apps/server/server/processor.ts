@@ -13,6 +13,8 @@
  */
 
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
+import path from 'path';
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import {
     spawnProcess,
@@ -80,8 +82,11 @@ let _inmem_lastSSEKeepAlive = 0;
 // Disk cleanup tracking
 let _inmem_lastDiskCheck = 0;
 
-// ML frame cleanup tracking
+// ML frame cleanup tracking (stale in-memory entries)
 let _inmem_lastMlFrameCleanup = 0;
+
+// AI frames age-based file cleanup tracking (runs every hour)
+let _inmem_lastAiFrameAgeCleanup = 0;
 
 // Processing state type for ffmpeg movement processing
 type ProcessingMovementState = {
@@ -332,6 +337,30 @@ function killMLProcess(proc: ChildProcessWithoutNullStreams): void {
         }
     }, 3000);
 }
+function getPythonExecutable(): string {
+    const isWin = process.platform === 'win32';
+    const defaultCmd = isWin ? 'python' : 'python3';
+    
+    // Search upwards from process.cwd() to find .venv
+    let currentDir = process.cwd();
+    for (let i = 0; i < 4; i++) {
+        const venvPath = path.join(currentDir, '.venv');
+        if (existsSync(venvPath)) {
+            const pythonExe = isWin 
+                ? path.join(venvPath, 'Scripts', 'python.exe')
+                : path.join(venvPath, 'bin', 'python');
+            
+            if (existsSync(pythonExe)) {
+                return pythonExe;
+            }
+        }
+        const parentDir = path.dirname(currentDir);
+        if (parentDir === currentDir) break;
+        currentDir = parentDir;
+    }
+    
+    return defaultCmd;
+}
 
 /**
  * controllerDetector - Manages ML detection process lifecycle (starts/stops Python detector)
@@ -424,7 +453,7 @@ export async function controllerDetector(): Promise<void> {
 
             const newProcess = spawnProcess({
                 name: 'ML-Detection',
-                cmd: process.platform === 'win32' ? 'python' : 'python3',
+                cmd: getPythonExecutable(),
                 args: cmdArgs,
                 cwd: aiDir,
                 onStdout: mlProcessor.processStdout,
@@ -728,6 +757,13 @@ export async function controllerFFmpegConfirmation(
  */
 async function detectServerSideMovement(cameraEntry: CameraEntry): Promise<boolean> {
     const streamDir = `${cameraEntry.disk}/${cameraEntry.folder}`;
+    // Minimum number of scene-changed frames required to consider it real motion.
+    // A single noisy frame from compression artifacts won't pass this gate.
+    const MIN_CHANGED_FRAMES = 3;
+    // Scene change threshold: 0.12 = 12% pixel difference.
+    // Higher than before (was 0.05) to ignore JPEG/H.264 block noise on static scenes.
+    const SCENE_THRESHOLD = 0.12;
+
     try {
         const files = await fs.readdir(streamDir);
         const tsFiles = files
@@ -751,21 +787,23 @@ async function detectServerSideMovement(cameraEntry: CameraEntry): Promise<boole
         return new Promise<boolean>((resolveReject) => {
             const ffmpeg = spawn(FFMPEG_CMD, [
                 '-i', targetSegment.path,
-                '-vf', "select='gt(scene,0.02)',showinfo",
+                '-vf', `select='gt(scene,${SCENE_THRESHOLD})',showinfo`,
                 '-f', 'null',
                 '-'
             ]);
 
-            let hasMotion = false;
+            // Count how many frames actually exceeded the scene threshold.
+            // Each selected frame produces one "n:" line in showinfo output.
+            let changedFrameCount = 0;
             ffmpeg.stderr.on('data', (data) => {
                 const chunk = data.toString();
-                if (chunk.includes('showinfo')) {
-                    hasMotion = true;
-                }
+                // showinfo prints one line per selected frame containing "n:" + frame index
+                const matches = chunk.match(/\[Parsed_showinfo_1/g);
+                if (matches) changedFrameCount += matches.length;
             });
 
             ffmpeg.on('close', () => {
-                resolveReject(hasMotion);
+                resolveReject(changedFrameCount >= MIN_CHANGED_FRAMES);
             });
 
             ffmpeg.on('error', () => {
@@ -885,9 +923,50 @@ export async function detectCameraMovement(cameraKey: string): Promise<void> {
 
         if (hasMovement) {
             metrics.movementDetectionApiCalls.inc({ camera: cameraEntry.name, result: 'detected' });
-            await handleMovementDetected(cameraKey, current_movement_key, cameraEntry, control);
+
+            // For server-side detection, require N consecutive positive polls before creating
+            // a brand-new movement record. This filters out single-frame compression noise
+            // that would otherwise create spurious movement events for stationary scenes.
+            // (Continuation of an *existing* movement is always allowed immediately.)
+            const REQUIRED_CONSECUTIVE_POSITIVES = usedServerSide ? 2 : 1;
+            const currentConsecutivePositives = (movementDetectionStatus?.consecutiveServerPositives || 0) + 1;
+
+            if (!current_movement_key && usedServerSide && currentConsecutivePositives < REQUIRED_CONSECUTIVE_POSITIVES) {
+                // Not enough consecutive detections yet — accumulate the counter and wait
+                deps.logger.debug('detectCameraMovement: server-side positive, waiting for confirmation', {
+                    camera: cameraEntry.name,
+                    consecutiveServerPositives: currentConsecutivePositives,
+                    required: REQUIRED_CONSECUTIVE_POSITIVES
+                });
+                deps.setCameraCache(cameraKey, {
+                    ...deps.getCameraCache()[cameraKey],
+                    movementDetectionStatus: {
+                        ...movementDetectionStatus,
+                        consecutiveServerPositives: currentConsecutivePositives,
+                        control: { ...control, fn_not_finished: false }
+                    }
+                });
+            } else {
+                // Either camera-API detection (trusted) or consecutive server detections met threshold
+                deps.setCameraCache(cameraKey, {
+                    ...deps.getCameraCache()[cameraKey],
+                    movementDetectionStatus: {
+                        ...movementDetectionStatus,
+                        consecutiveServerPositives: currentConsecutivePositives
+                    }
+                });
+                await handleMovementDetected(cameraKey, current_movement_key, cameraEntry, control);
+            }
         } else {
             metrics.movementDetectionApiCalls.inc({ camera: cameraEntry.name, result: 'none' });
+            // Reset consecutive positive counter on any negative result
+            deps.setCameraCache(cameraKey, {
+                ...deps.getCameraCache()[cameraKey],
+                movementDetectionStatus: {
+                    ...movementDetectionStatus,
+                    consecutiveServerPositives: 0
+                }
+            });
             await handleNoMovement(cameraKey, current_movement_key, cameraEntry, movementDetectionStatus, control);
         }
     } catch (error) {
@@ -2172,6 +2251,78 @@ export async function runControlLoop(): Promise<void> {
 
     metrics.controlLoopDuration.observe((performance.now() - loopStart) / 1000);
     metrics.activeCameras.set(cameraKeys.filter(k => cameraCache[k]?.cameraEntry && !cameraCache[k].cameraEntry.delete && cameraCache[k].cameraEntry.enable_streaming).length);
+
+    // Age-based AI frames cleanup (every hour)
+    if (now - _inmem_lastAiFrameAgeCleanup > 60 * 60 * 1000) {
+        _inmem_lastAiFrameAgeCleanup = now;
+        await cleanupAiFramesByAge();
+    }
+}
+
+/**
+ * cleanupAiFramesByAge - Deletes AI frame images (.jpg) and movement playlists (.m3u8)
+ * from the AI frames directory that are older than MAX_AI_FRAME_AGE_MS (default: 24h).
+ * This runs regardless of disk usage to keep the frames directory tidy.
+ */
+const MAX_AI_FRAME_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export async function cleanupAiFramesByAge(): Promise<void> {
+    const settingsCache = deps.getSettingsCache();
+    const { settings } = settingsCache;
+
+    if (!settings.disk_base_dir || !settings.detection_frames_path) {
+        return; // AI frames path not configured, nothing to clean
+    }
+
+    const framesDir = `${settings.disk_base_dir}/${settings.detection_frames_path}`.replace(/\/+/g, '/');
+
+    let dirExists = false;
+    try {
+        await fs.stat(framesDir);
+        dirExists = true;
+    } catch {
+        return; // Directory doesn't exist yet
+    }
+
+    if (!dirExists) return;
+
+    try {
+        const cutoffMs = Date.now() - MAX_AI_FRAME_AGE_MS;
+        const files = await fs.readdir(framesDir);
+
+        // Only target AI frame images and movement playlists, not stream.m3u8 etc.
+        const targetFiles = files.filter(f => f.endsWith('.jpg') || (f.endsWith('.m3u8') && f.startsWith('mov')));
+
+        let deletedCount = 0;
+        let deletedBytes = 0;
+
+        await Promise.all(targetFiles.map(async (filename) => {
+            const filePath = `${framesDir}/${filename}`;
+            try {
+                const fileStat = await fs.stat(filePath);
+                if (fileStat.mtimeMs < cutoffMs) {
+                    await fs.rm(filePath);
+                    deletedCount++;
+                    deletedBytes += fileStat.size;
+                }
+            } catch {
+                // File may have already been deleted concurrently, skip
+            }
+        }));
+
+        if (deletedCount > 0) {
+            deps.logger.info('AI frames age cleanup complete', {
+                framesDir,
+                deletedFiles: deletedCount,
+                deletedMB: (deletedBytes / (1024 * 1024)).toFixed(2),
+                cutoffAge: '24h'
+            });
+        } else {
+            deps.logger.debug('AI frames age cleanup: no files to remove', { framesDir });
+        }
+    } catch (err) {
+        deps.logger.warn('AI frames age cleanup error', { framesDir, error: String(err) });
+    }
 }
 
 /**

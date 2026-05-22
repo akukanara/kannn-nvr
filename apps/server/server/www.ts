@@ -457,20 +457,60 @@ export async function initWeb(deps: WebServerDependencies, port: number = 8080):
                     ctx.body = `Camera not found: ${m.cameraKey}`;
                     return;
                 }
-                const hasDetections = m.detection_output?.tags && m.detection_output.tags.length > 0;
-                const serve = `${c.disk}/${c.folder}/${hasDetections ? 'mlimage' : 'image'}${moment}.jpg`;
-                
-                try {
-                    await fs.stat(serve);
-                } catch (statError: any) {
-                    if (statError.code === 'ENOENT') {
-                        ctx.status = 404;
-                        ctx.body = 'Image file not found';
-                        return;
+
+                const framesPath = getFramesPath(getSettingsCache().settings, c.disk, c.folder);
+                let serve: string | null = null;
+
+                // 1. Try to find the best ML detected frame
+                if (m.detection_output?.tags && Array.isArray(m.detection_output.tags) && m.detection_output.tags.length > 0) {
+                    const sortedTags = [...m.detection_output.tags].sort((a, b) => b.maxProbability - a.maxProbability);
+                    for (const tag of sortedTags) {
+                        if (tag.maxProbabilityImage) {
+                            const testPath = `${framesPath}/${tag.maxProbabilityImage}`.replace(/\/+/g, '/');
+                            try {
+                                await fs.stat(testPath);
+                                serve = testPath;
+                                break;
+                            } catch {}
+                        }
                     }
-                    throw statError;
                 }
-                
+
+                // 2. If no ML image found/available, try standard frame names
+                if (!serve) {
+                    const candidates = [
+                        `${framesPath}/mov${moment}_0010.jpg`,
+                        `${framesPath}/mov${moment}_0005.jpg`,
+                        `${framesPath}/mov${moment}_0001.jpg`,
+                        `${framesPath}/mov${moment}_0002.jpg`
+                    ].map(p => p.replace(/\/+/g, '/'));
+
+                    for (const cand of candidates) {
+                        try {
+                            await fs.stat(cand);
+                            serve = cand;
+                            break;
+                        } catch {}
+                    }
+                }
+
+                // 3. Fallback: Search the directory for any frame of this movement
+                if (!serve) {
+                    try {
+                        const files = await fs.readdir(framesPath);
+                        const matched = files.find(f => f.startsWith(`mov${moment}_`) && f.endsWith('.jpg'));
+                        if (matched) {
+                            serve = `${framesPath}/${matched}`.replace(/\/+/g, '/');
+                        }
+                    } catch {}
+                }
+
+                if (!serve) {
+                    ctx.status = 404;
+                    ctx.body = 'Image file not found';
+                    return;
+                }
+
                 ctx.set('content-type', 'image/jpeg');
                 ctx.body = createReadStream(serve, { encoding: undefined });
             } catch (e: any) {
@@ -1086,7 +1126,12 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
             sseManager.addClient(ctx);
         })
         .get('/movements', async (ctx) => {
-            const mode = ctx.query['mode'];
+            const modeQuery = ctx.query['mode'];
+            const mode = typeof modeQuery === 'string'
+                ? (modeQuery.toLowerCase() === 'movement' ? 'Movement'
+                   : modeQuery.toLowerCase() === 'filtered' ? 'Filtered'
+                   : modeQuery.toLowerCase() === 'time' ? 'Time' : modeQuery)
+                : 'Movement';
             const limitParam = ctx.query['limit'];
             const cursorParam = ctx.query['cursor']; // Last key from previous page for pagination
             const limit = limitParam ? Math.min(parseInt(limitParam as string, 10) || 1000, 10000) : 1000;

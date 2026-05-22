@@ -433,6 +433,7 @@ export default function PlaybackPage() {
                     <PlaybackPlayer
                       src={activePlayerSrc}
                       autoPlay
+                      enableLiveAIByDefault
                       onTimeUpdate={(t) => setVideoCurrentTimeSec(t)}
                       onEnded={handleVideoEnded}
                     />

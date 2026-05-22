@@ -592,6 +592,7 @@ export function CameraGrid() {
               autoPlay
               muted={false}
               objectFit="contain"
+              enableLiveAI
             />
           </Box>
 

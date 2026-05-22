@@ -309,7 +309,10 @@ def main():
         print("\nEnd of input reached.")
     finally:
         model.release()
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()

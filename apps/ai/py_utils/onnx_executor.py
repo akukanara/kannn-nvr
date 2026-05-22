@@ -25,6 +25,19 @@ def ignore_dim_with_zero(_shape, _shape_target):
         return False
 
 
+def shapes_match(model_shape, data_shape):
+    if len(model_shape) != len(data_shape):
+        return False
+    for m, d in zip(model_shape, data_shape):
+        if isinstance(m, str):
+            continue
+        if m is None:
+            continue
+        if m != d:
+            return False
+    return True
+
+
 class ONNX_model_container_py:
     def __init__(self, model_path) -> None:
         # sess_options=
@@ -57,7 +70,9 @@ class ONNX_model_container_py:
             
             # reshape if need
             if _input.shape != list(input_datas[i].shape):
-                if ignore_dim_with_zero(input_datas[i].shape,_input.shape):
+                if shapes_match(_input.shape, input_datas[i].shape):
+                    pass
+                elif ignore_dim_with_zero(input_datas[i].shape,_input.shape):
                     input_datas[i] = input_datas[i].reshape(_input.shape)
                     print("WARNING: reshape inputdata-{}: from {} to {}".format(i, input_datas[i].shape, _input.shape))
                 else:
